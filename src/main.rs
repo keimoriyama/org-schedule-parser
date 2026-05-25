@@ -1,11 +1,14 @@
+use regex::Regex;
 use std::fs::File;
 use walkdir::{DirEntry, WalkDir};
 
+#[derive(PartialEq, Debug)]
 enum ScheduleType {
     Deadline,
     Schedule,
 }
 
+#[derive(PartialEq, Debug)]
 struct Schedule {
     head: String,
     schedule: String,
@@ -38,44 +41,64 @@ fn list_org_files() -> Vec<DirEntry> {
         .collect();
 }
 
-fn parse_schedules(content: String) -> Vec<Schedule> {
-    let mut schedules = Vec::new();
-    let mut current_head = String::new();
-
-    for line in content.lines() {
-        if line.starts_with("* ") {
-            current_head = line[2..].to_string();
-        } else if line.contains("SCHEDULED: <") {
-            if let Some(start) = line.find("SCHEDULED: <") {
-                if let Some(end) = line[start..].find('>') {
-                    let schedule_str = &line[start + 12..start + end];
-                    schedules.push(Schedule {
-                        head: current_head.clone(),
-                        schedule: schedule_str.to_string(),
-                        scheduletype: ScheduleType::Schedule,
-                    });
-                }
-            }
-        } else if line.contains("DEADLINE: <") {
-            if let Some(start) = line.find("DEADLINE: <") {
-                if let Some(end) = line[start..].find('>') {
-                    let schedule_str = &line[start + 11..start + end];
-                    schedules.push(Schedule {
-                        head: current_head.clone(),
-                        schedule: schedule_str.to_string(),
-                        scheduletype: ScheduleType::Deadline,
-                    });
-                }
-            }
-        }
+fn extract_head(content: String) -> Option<String> {
+    let header_re = Regex::new(r"^(\*+)\s+(TODO|DOING|DONE)?\s*(?P<title>.+)$").unwrap();
+    if let Some(caps) = header_re.captures(&content) {
+        return Some(caps["title"].to_string());
     }
+    None
+}
 
-    schedules
+fn extract_scuedule_and_type(content: String) -> Option<(String, ScheduleType)> {
+    let schedule_re = Regex::new(r"(?P<type>SCHEDULED|DEADLINE):\s+<(?P<date>[^>]+)>").unwrap();
+    if let Some(caps) = schedule_re.captures(&content) {
+        let scheduletype = match &caps["type"] {
+            "SCHEDULED" => ScheduleType::Schedule,
+            "DEADLINE" => ScheduleType::Deadline,
+            _ => return None,
+        };
+        return Some((caps["date"].to_string(), scheduletype));
+    }
+    None
+}
+
+fn parse_schedules(content: String) -> Vec<Schedule> {
+    return vec![];
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_extract_head_with_status_todo() {
+        let sample_input = "* TODO Sample Task".to_string();
+        let expected = Some("Sample Task".to_string());
+        assert_eq!(extract_head(sample_input), expected);
+    }
+    #[test]
+    fn test_extract_head_with_status_doing() {
+        let sample_input = "* DOING Sample Task".to_string();
+        let expected = Some("Sample Task".to_string());
+        assert_eq!(extract_head(sample_input), expected);
+    }
+    #[test]
+    fn test_extract_head_with_status_done() {
+        let sample_input = "* DONE Sample Task".to_string();
+        let expected = Some("Sample Task".to_string());
+        assert_eq!(extract_head(sample_input), expected);
+    }
+    #[test]
+    fn test_extract_head_with_status_mulitple_bullet() {
+        let sample_input = "*** TODO Sample Task".to_string();
+        let expected = Some("Sample Task".to_string());
+        assert_eq!(extract_head(sample_input), expected);
+    }
+    #[test]
+    fn test_extract_head_with_status_None() {
+        let sample_input = " TODO Sample Task".to_string();
+        assert_eq!(extract_head(sample_input), None);
+    }
+
     #[test]
     fn test_parse_scuedules_scuedule() {
         let sample_input = "* Test Schedule\nSCHEDULED: <2024-06-01 Sat 10:00>".to_string();
