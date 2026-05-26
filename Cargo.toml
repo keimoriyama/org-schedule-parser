@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = "0.4.44"
+log = "0.4.30"
 regex = "1.12.3"
+simple_logger = "5.2.0"
 walkdir = "2.5.0"
