@@ -20,16 +20,18 @@ struct Schedule {
     scheduletype: ScheduleType,
 }
 
-#[derive(Parser)]
-struct Parser {
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct ArgParse {
+    #[arg(short, long)]
     org_dir: String,
 }
 
 fn main() {
     simple_logger::SimpleLogger::new().env().init().unwrap();
-    let args = Args::parse();
+    let args = ArgParse::parse();
     let base_path = args.org_dir;
-    let org_files = list_org_files(base_path);
+    let org_files = list_org_files(&base_path);
     let mut schedules: Vec<Schedule> = vec![];
     for entry in org_files {
         if !is_org_file(&entry) {
@@ -118,6 +120,7 @@ fn is_org_file(entry: &DirEntry) -> bool {
 }
 
 fn list_org_files(path: &str) -> Vec<DirEntry> {
+    info!("Listing org files in directory: {}", path);
     return WalkDir::new(path).into_iter().map(|e| e.unwrap()).collect();
 }
 
