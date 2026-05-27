@@ -1,3 +1,4 @@
+use clap::Parser;
 use log::{info, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -19,9 +20,15 @@ struct Schedule {
     scheduletype: ScheduleType,
 }
 
+#[derive(Parser)]
+struct Parser {
+    org_dir: String,
+}
+
 fn main() {
     simple_logger::SimpleLogger::new().env().init().unwrap();
-    let base_path = "../../keimoriyama/org-files/";
+    let args = Args::parse();
+    let base_path = args.org_dir;
     let org_files = list_org_files(base_path);
     let mut schedules: Vec<Schedule> = vec![];
     for entry in org_files {
@@ -30,15 +37,12 @@ fn main() {
             continue;
         }
         if let Some(mut file) = open_org_file(&entry) {
-            //info!("Opened file: {:?}", entry.path());
-            //info!("File content: {:?}", file);
-            // read file content
             let mut content = String::new();
             if let Err(e) = file.read_to_string(&mut content) {
                 warn!("Failed to read file {:?}: {}", entry.path(), e);
                 continue;
             }
-            //info!("File content: {:?}", content);
+
             let schedule = parse_schedules(content);
             info!(
                 "Extracted schedules from file {:?}: {:?}",
@@ -158,8 +162,6 @@ fn parse_schedules(content: String) -> Vec<Schedule> {
     let mut result: Vec<Schedule> = vec![];
     for content in content.lines() {
         let li = content.to_string();
-        // info!("Parsing line: {:?}", li);
-
         if let Some(head) = extract_head(li.clone()) {
             current_head = Some(head);
         } else if let Some(schedule_and_type) = extract_schedule_and_type(li.clone()) {
