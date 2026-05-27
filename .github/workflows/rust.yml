@@ -29,5 +29,5 @@ jobs:
     - name: Upload release artifact
       uses: actions/upload-artifact@v4
       with:
-        name: <app-name>
-        path: target/${{ matrix.BUILD_TARGET }}/<app-name>
+        name: org-schedule-parser
+        path: target/${{ matrix.BUILD_TARGET }}/org_schedule_parser
