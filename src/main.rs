@@ -1,21 +1,24 @@
-use chrono::NaiveDate;
 use log::{info, warn};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::io::{BufWriter, Write};
 use std::{fs::File, io::Read};
 use walkdir::{DirEntry, WalkDir};
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Serialize, Deserialize, Debug, Clone)]
 enum ScheduleType {
     Deadline,
     Schedule,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct Schedule {
     head: String,
-    schedule: NaiveDate,
+    schedule: String,
+    time: Option<String>,
     scheduletype: ScheduleType,
 }
+
 fn main() {
     simple_logger::SimpleLogger::new().env().init().unwrap();
     let base_path = "../../keimoriyama/org-files/";
@@ -26,12 +29,12 @@ fn main() {
             warn!("Skipping non-org file: {:?}", entry.path());
             continue;
         }
-        if let Some(file) = open_org_file(&entry) {
+        if let Some(mut file) = open_org_file(&entry) {
             //info!("Opened file: {:?}", entry.path());
             //info!("File content: {:?}", file);
             // read file content
             let mut content = String::new();
-            if let Err(e) = file.take(10_000).read_to_string(&mut content) {
+            if let Err(e) = file.read_to_string(&mut content) {
                 warn!("Failed to read file {:?}: {}", entry.path(), e);
                 continue;
             }
@@ -46,13 +49,31 @@ fn main() {
         }
     }
     // 今日より前の日付を持つスケジュールをフィルタリング
-    let today = chrono::Local::today().naive_local();
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
     info!("extracted schedule before filtering: {:?}", schedules);
     let upcoming_schedules: Vec<Schedule> = schedules
         .into_iter()
-        .filter(|s| s.schedule >= today)
+        .filter(|s| s.schedule.as_str() >= today.as_str())
         .collect();
-    info!("Upcoming schedules: {:?}", upcoming_schedules);
+
+    let file = File::create("output.jsonl");
+    match file {
+        Ok(f) => f,
+        Err(e) => {
+            panic!("Failed to create output file: {}", e);
+        }
+    };
+    // write result in jsonl
+    let mut writer = BufWriter::new(File::create("output.jsonl").unwrap());
+    for schedule in upcoming_schedules {
+        let json = serde_json::to_string(&schedule).unwrap();
+        if let Err(e) = writeln!(writer, "{}", json) {
+            warn!("Failed to write schedule to output file: {}", e);
+        }
+    }
 }
 
 fn open_org_file(entry: &DirEntry) -> Option<File> {
@@ -69,10 +90,11 @@ fn extract_org_head_and_schedules(content: String) -> Vec<Schedule> {
             current_head = Some(head)
         } else if let Some(caps) = extract_schedule_and_type(line.to_string()) {
             if let Some(head) = &current_head {
-                for (schedule, scheduletype) in caps {
+                for (schedule, time, scheduletype) in caps {
                     schedules.push(Schedule {
                         head: head.clone(),
                         schedule,
+                        time,
                         scheduletype,
                     });
                 }
@@ -103,12 +125,14 @@ fn extract_head(content: String) -> Option<String> {
     None
 }
 
-fn extract_schedule_and_type(content: String) -> Option<Vec<(NaiveDate, ScheduleType)>> {
+fn extract_schedule_and_type(
+    content: String,
+) -> Option<Vec<(String, Option<String>, ScheduleType)>> {
     let schedule_re = Regex::new(
-        r"(?P<type>SCHEDULED|DEADLINE):\s+<(?P<date>\d{4}-\d{2}-\d{2})(?:\s+\w{3})?(?:\s+\d{2}:\d{2})?(?:\s+[^>]*)?>",
+        r"(?P<type>SCHEDULED|DEADLINE):\s+<(?P<date>\d{4}-\d{2}-\d{2})(?:\s+\w{3})?(?:\s+(?P<time>\d{2}:\d{2}))?(?:\s+[^>]*)?>",
     )
     .unwrap();
-    let schedules: Vec<(NaiveDate, ScheduleType)> = schedule_re
+    let schedules: Vec<(String, Option<String>, ScheduleType)> = schedule_re
         .find_iter(&content)
         .map(|matches| {
             let caps = schedule_re.captures(matches.as_str()).unwrap();
@@ -118,13 +142,8 @@ fn extract_schedule_and_type(content: String) -> Option<Vec<(NaiveDate, Schedule
                 _ => panic!("Unexpected schedule type"),
             };
             //info!("caps for schedule: {:?}", caps);
-            let date = NaiveDate::parse_from_str(&caps["date"], "%Y-%m-%d");
-            //info!("date parse result: {:?}", date);
-            match date {
-                Ok(d) => (d, scheduletype),
-                Err(e) => panic!("Failed to parse date: {}", e),
-            }
-            //            (date, scheduletype)
+            let time = caps.name("time").map(|m| m.as_str().to_string());
+            (caps["date"].to_string(), time, scheduletype)
         })
         .collect();
     if schedules.is_empty() {
@@ -135,30 +154,30 @@ fn extract_schedule_and_type(content: String) -> Option<Vec<(NaiveDate, Schedule
 }
 
 fn parse_schedules(content: String) -> Vec<Schedule> {
-    let mut head: Option<String> = None;
+    let mut current_head: Option<String> = None;
     let mut result: Vec<Schedule> = vec![];
     for content in content.lines() {
         let li = content.to_string();
         // info!("Parsing line: {:?}", li);
-        // headがNoneの時は次の行のhead判定をする
-        if head.is_none() {
-            head = extract_head(li.clone());
-            continue;
+
+        if let Some(head) = extract_head(li.clone()) {
+            current_head = Some(head);
         } else if let Some(schedule_and_type) = extract_schedule_and_type(li.clone()) {
-            // scheduleがNoneではない場合、headとscheduleを組み合わせてSchedule構造体を作成する
+            if current_head.is_none() {
+                continue;
+            }
             for schedule in schedule_and_type.iter() {
                 result.push(Schedule {
-                    head: head.clone().unwrap(),
+                    head: current_head.clone().unwrap(),
                     schedule: schedule.0.clone(),
-                    scheduletype: schedule.1.clone(),
+                    time: schedule.1.clone(),
+                    scheduletype: schedule.2.clone(),
                 })
             }
             info!(
                 "Extracted head: {:?}, schedule and type: {:?}",
-                head, schedule_and_type
+                current_head, schedule_and_type
             );
-        } else {
-            head = None;
         }
     }
     return result;
@@ -172,7 +191,8 @@ mod tests {
     fn test_extract_schedule_and_type_schedule() {
         let sample_input = "SCHEDULED: <2024-06-01 Sat 10:00>".to_string();
         let expected = Some(vec![(
-            NaiveDate::parse_from_str(r"2024-06-01", "%Y-%m-%d").unwrap(),
+            "2024-06-01".to_string(),
+            Some("10:00".to_string()),
             ScheduleType::Schedule,
         )]);
         assert_eq!(extract_schedule_and_type(sample_input), expected);
@@ -181,7 +201,8 @@ mod tests {
     fn test_extract_schedule_and_type_schedule_without_time() {
         let sample_input = "SCHEDULED: <2024-06-01 Sat>".to_string();
         let expected = Some(vec![(
-            NaiveDate::parse_from_str(r"2024-06-01", "%Y-%m-%d").unwrap(),
+            "2024-06-01".to_string(),
+            None,
             ScheduleType::Schedule,
         )]);
         assert_eq!(extract_schedule_and_type(sample_input), expected);
@@ -191,7 +212,8 @@ mod tests {
     fn test_extract_schedule_and_type_ignores_mismatched_weekday() {
         let sample_input = "SCHEDULED: <2025-12-15 Wed>".to_string();
         let expected = Some(vec![(
-            NaiveDate::parse_from_str(r"2025-12-15", "%Y-%m-%d").unwrap(),
+            "2025-12-15".to_string(),
+            None,
             ScheduleType::Schedule,
         )]);
         assert_eq!(extract_schedule_and_type(sample_input), expected);
@@ -201,7 +223,8 @@ mod tests {
     fn test_extract_schedule_and_type_deadline() {
         let sample_input = "DEADLINE: <2024-06-01 Sat 10:00>".to_string();
         let expected = Some(vec![(
-            NaiveDate::parse_from_str("2024-06-01", "%Y-%m-%d").unwrap(),
+            "2024-06-01".to_string(),
+            Some("10:00".to_string()),
             ScheduleType::Deadline,
         )]);
         assert_eq!(extract_schedule_and_type(sample_input), expected);
@@ -211,7 +234,8 @@ mod tests {
     fn test_extract_schedule_and_type_deadline_plus_one() {
         let sample_input = "DEADLINE: <2026-05-13 Wed 10:00 +1w>".to_string();
         let expected = Some(vec![(
-            NaiveDate::parse_from_str("2026-05-13", "%Y-%m-%d").unwrap(),
+            "2026-05-13".to_string(),
+            Some("10:00".to_string()),
             ScheduleType::Deadline,
         )]);
         assert_eq!(extract_schedule_and_type(sample_input), expected)
@@ -222,12 +246,10 @@ mod tests {
         let sample_input =
             "SCHEDULED: <2026-06-05 Fri> DEADLINE: <2026-06-05 Fri 21:00>".to_string();
         let expected = Some(vec![
+            ("2026-06-05".to_string(), None, ScheduleType::Schedule),
             (
-                NaiveDate::parse_from_str("2026-06-05", "%Y-%m-%d").unwrap(),
-                ScheduleType::Schedule,
-            ),
-            (
-                NaiveDate::parse_from_str("2026-06-05", "%Y-%m-%d").unwrap(),
+                "2026-06-05".to_string(),
+                Some("21:00".to_string()),
                 ScheduleType::Deadline,
             ),
         ]);
@@ -239,12 +261,14 @@ mod tests {
         let expected = vec![
             Schedule {
                 head: "Test Schedule".to_string(),
-                schedule: NaiveDate::parse_from_str("2024-06-01", "%Y-%m-%d").unwrap(),
+                schedule: "2024-06-01".to_string(),
+                time: Some("10:00".to_string()),
                 scheduletype: ScheduleType::Schedule,
             },
             Schedule {
                 head: "Test Schedule".to_string(),
-                schedule: NaiveDate::parse_from_str("2024-06-01", "%Y-%m-%d").unwrap(),
+                schedule: "2024-06-01".to_string(),
+                time: None,
                 scheduletype: ScheduleType::Deadline,
             },
         ];
@@ -256,9 +280,23 @@ mod tests {
         let sample_input = "* Test Schedule\nSCHEDULED: <2024-06-01 Sat 10:00>".to_string();
         let expected = vec![Schedule {
             head: "Test Schedule".to_string(),
-            schedule: NaiveDate::parse_from_str("2024-06-01", "%Y-%m-%d").unwrap(),
+            schedule: "2024-06-01".to_string(),
+            time: Some("10:00".to_string()),
             scheduletype: ScheduleType::Schedule,
         }];
         assert_eq!(extract_org_head_and_schedules(sample_input), expected);
+    }
+
+    #[test]
+    fn test_parse_schedules_keeps_head_through_body_lines() {
+        let sample_input =
+            "* Test Schedule\nnotes before schedule\nSCHEDULED: <2024-06-01 Sat>".to_string();
+        let expected = vec![Schedule {
+            head: "Test Schedule".to_string(),
+            schedule: "2024-06-01".to_string(),
+            time: None,
+            scheduletype: ScheduleType::Schedule,
+        }];
+        assert_eq!(parse_schedules(sample_input), expected);
     }
 }
