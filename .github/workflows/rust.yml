@@ -38,6 +38,7 @@ jobs:
       contents: write
 
     steps:
+    - uses: actions/checkout@v6
     - name: Download release artifact
       uses: actions/download-artifact@v5
       with:
