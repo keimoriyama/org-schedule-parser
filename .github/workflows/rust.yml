@@ -3,19 +3,17 @@ name: Rust
 on:
   push:
     branches: [ "master" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "master" ]
 
 env:
   CARGO_TERM_COLOR: always
+  BINARY_NAME: org_schedule_parser
+  ARTIFACT_NAME: org-schedule-parser
 
 jobs:
   build:
-    strategy:
-      matrix:
-        BUILD_TARGET: [release] # refers to a cargo profile
-    outputs:
-      release_built: ${{ steps.set-output.outputs.release_built }}
     runs-on: ubuntu-latest
 
     steps:
@@ -24,10 +22,32 @@ jobs:
       run: rustup override set nightly
     - name: Run tests
       run: cargo test --verbose
-    - name: Build binaries in "${{ matrix.BUILD_TARGET }}" mode
-      run: cargo build --profile ${{ matrix.BUILD_TARGET }}
+    - name: Build release binary
+      run: cargo build --release
     - name: Upload release artifact
       uses: actions/upload-artifact@v4
       with:
-        name: org-schedule-parser
-        path: target/${{ matrix.BUILD_TARGET }}/org_schedule_parser
+        name: ${{ env.ARTIFACT_NAME }}
+        path: target/release/${{ env.BINARY_NAME }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download release artifact
+      uses: actions/download-artifact@v5
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: dist
+    - name: Publish built binary to GitHub releases
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        chmod +x dist/${{ env.BINARY_NAME }}
+        gh release create "${GITHUB_REF_NAME}" \
+          "dist/${{ env.BINARY_NAME }}#${{ env.ARTIFACT_NAME }}-linux-x86_64" \
+          --generate-notes
